@@ -1,0 +1,499 @@
+#include <iostream>
+#include "raylib.h"
+#include <deque>
+#include <algorithm>
+#include "raymath.h"
+#include <random>
+
+#include <vector>
+
+using namespace std;
+
+int bulletCount = 0;
+
+namespace Config {
+    float BASE_WIDTH = 600;
+    float BASE_HEIGHT = 400;
+    string TITLE = "Swarm Shooter";
+    float PLAYER_SCALE = 0.3f;
+    float ENEMY_SCALE = 0.3f;
+    float BULLET_SCALE = 0.3f;
+    float ITEM_SCALE = 0.1f;
+} ;
+
+class Player {
+public:
+    Player(const Texture2D& playerTexture) {
+        _texture = playerTexture;
+        position = {Config::BASE_WIDTH / 2.0f , Config::BASE_HEIGHT / 2.0f};
+    }
+    void Draw() {
+        DrawTextureEx(_texture,position, angle, Config::PLAYER_SCALE,WHITE);
+    }
+    Vector2 GetCenter() const {
+        float width = _texture.width * Config::PLAYER_SCALE;
+        float height = _texture.height * Config::PLAYER_SCALE;
+
+        // The local center offset relative to top-left (position)
+        Vector2 localCenter = { width / 2.0f, height / 2.0f };
+
+        // Convert player's angle to radians
+        float rad = angle * DEG2RAD;
+        float cosA = cosf(rad);
+        float sinA = sinf(rad);
+
+        // Rotate the center offset around the player's position
+        float rotatedX = localCenter.x * cosA - localCenter.y * sinA;
+        float rotatedY = localCenter.x * sinA + localCenter.y * cosA;
+
+        return {
+            position.x + rotatedX,
+            position.y + rotatedY
+        };
+    }
+    float getAngle() {
+        return angle;
+    }
+    void Move() {
+        Vector2 pos = {0.0f,0.0f};
+
+        if (IsKeyDown(KEY_UP)) {
+            pos.y -= 1.0f;
+        }
+        if (IsKeyDown(KEY_DOWN)) {
+            pos.y += 1.0f;
+        }
+        if (IsKeyDown(KEY_LEFT)) {
+            pos.x -= 1.0f;
+        }
+        if (IsKeyDown(KEY_RIGHT)) {
+            pos.x += 1.0f;
+        }
+
+        if (Vector2Length(pos) > 0.0f) {
+            pos = Vector2Normalize(pos); // normalized positions for smooth movement ensuring magnitude doesnt exceed unity
+        }
+
+        float dt = GetFrameTime();
+        position.x += pos.x * speed * dt;
+        position.y += pos.y * speed * dt;
+
+        Vector2 mousePos = GetMousePosition();
+        Vector2 toMouse = Vector2Subtract(mousePos,position);
+        angle = atan2f(toMouse.y, toMouse.x) * RAD2DEG;
+
+    }
+    Texture2D _texture;
+    Vector2 position;
+    float speed = 200.0f;
+    float angle = 0.0f;
+    int lives = 70; //hp
+};
+
+struct BulletInstance {
+    Vector2 position;
+    Vector2 velocity;
+    bool active = false;
+    Texture _bullet_tex;
+    float angle;
+
+    BulletInstance(const Texture2D& bulletTexture, const Vector2& playerPosition) {
+        _bullet_tex = bulletTexture;
+        position = playerPosition;
+    }
+
+};
+class Bullet {
+public:
+
+    void Load(BulletInstance instance) {
+        for (int i = 0; i < totalbullet; i++) {
+            bullets.emplace_back(BulletInstance(instance._bullet_tex, instance.position));
+        }
+    }
+    void Draw() {
+
+        for (int i = 0; i < bullets.size(); i++) {
+            if (bullets[i].active) {
+                DrawTextureEx(bullets[i]._bullet_tex, bullets[i].position, angle, Config::BULLET_SCALE,WHITE);
+            }
+        }
+    }
+    void Launch(Vector2 playerPosition) {
+        if (IsKeyPressed(KEY_SPACE)) {
+            for (int i = 0; i < bullets.size(); i++) {
+              if (!bullets[i].active) {
+                  Vector2 mousePos = GetMousePosition();
+
+                  Vector2 direction = Vector2Subtract(mousePos, playerPosition);
+                  direction = Vector2Normalize(direction);
+
+                  bullets[i].velocity = Vector2Scale(direction, 800); //800 pixels per sec
+                  bullets[i].position = playerPosition;
+                  bullets[i].active = true;
+
+                  bulletCount++; //bullets used
+
+                  Vector2 toMouse = Vector2Subtract(mousePos,bullets[i].position);
+                  angle = atan2f(toMouse.y, toMouse.x) * RAD2DEG;
+                  break;
+              }
+            }
+        }
+
+        for (int i = 0; i < bullets.size(); i++) {
+            if (bullets[i].active) {
+                float dt = GetFrameTime();
+                bullets[i].position.x += bullets[i].velocity.x * dt;
+                bullets[i].position.y += bullets[i].velocity.y * dt;
+            }
+        }
+    }
+
+    void Update(const Vector2 playerPosition) {
+        for (int i = 0; i < bullets.size(); i++) {
+            bullets[i].position = playerPosition;
+        }
+    }
+    vector<BulletInstance> bullets;
+
+private:
+    int totalbullet = 100;
+    float angle = 0.0f;
+};
+
+class CollisionMap {
+public:
+    CollisionMap(const Texture2D& map) {
+        _texture_map = map;
+    }
+    void CheckWallCollision(Vector2& position, int width , int height, int scale) {
+         float mapX = _texture_map.width - (width * scale);
+         float mapY = _texture_map.height - (height * scale);
+
+         if (position.x <= 0) position.x = 0;
+         if (position.x > mapX) position.x = mapX;
+         if (position.y <= 0) position.y = 0;
+         if (position.y > mapY) position.y = mapY;
+    }
+
+    bool CheckCollision(Rectangle point1, Rectangle point2) {
+        return CheckCollisionRecs(point1, point2);
+    }
+    Texture2D _texture_map;
+};
+
+
+struct EnemyInstance {
+    Vector2 position = {100.0f, 100.0f};
+    bool active = true;
+    int currentFrame = 0;
+    float angleDeg = 0.0f;
+    float speed = 50.0f;
+    float frameTimer;
+    int totalFrames;
+    Texture2D _enemy_texture;
+    int total_enemy = 10;
+    int live = 40; // hp
+
+    EnemyInstance(const Texture& enemyTex, int total_frames) {
+        _enemy_texture = enemyTex;
+        totalFrames = total_frames;
+
+        vector<int> xPool;
+        vector<int> yPool;
+
+        // Fill pools with multiples of 50
+        for (int x = 50; x <= (int)GetScreenWidth() - 50; x += 50) xPool.push_back(x);
+        for (int y = 50; y <= (int)GetScreenHeight() - 50; y += 50) yPool.push_back(y);
+
+        // Shuffle both
+        random_device rd;
+        mt19937 g(rd());
+        shuffle(xPool.begin(), xPool.end(), g);
+        shuffle(yPool.begin(), yPool.end(), g);
+
+       position = {xPool[0] * 2, yPool[1] * 2};
+    }
+};
+
+class Enemy {
+public:
+    void Load(EnemyInstance instance) {
+        for (int i = 0; i < instance.total_enemy; i++) {
+            enemies.emplace_back(EnemyInstance(instance._enemy_texture,instance.totalFrames));
+        }
+        speed = instance.speed;
+        width = instance._enemy_texture.width;
+        height = instance._enemy_texture.height;
+        totalFrames = instance.totalFrames;
+    }
+
+    void Draw() {
+        for (int i = 0; i < enemies.size(); i++) {
+            if (enemies[i].active) {
+                float w = (width / totalFrames) ;
+                float h = (height);
+
+                Rectangle source = {
+                    w * enemies[i].currentFrame , 0.0f , w, h
+                };
+                Rectangle dest = {
+                    enemies[i].position.x, enemies[i].position.y , w, h
+                };
+
+                Vector2 origin = { w, h  };
+                DrawTexturePro(enemies[i]._enemy_texture, source, dest, origin, enemies[i].angleDeg, WHITE);
+            }
+        }
+    }
+
+    void Move(const Vector2 playerPosition) {
+        for (int i = 0; i < enemies.size(); i++) {
+             if (enemies[i].active) {
+                 //Vector2 enemy_direction = {0.0f, 0.0f};
+                 float dt = GetFrameTime();
+
+
+                 /*
+                 if (playerPosition.x < enemies[i].position.x) {
+                      enemy_direction.x -= 1.0f;
+                 }
+                 else {
+                     enemy_direction.x += 1.0f;
+                 }
+
+                 if (playerPosition.y < enemies[i].position.y) {
+                     enemy_direction.y -= 1.0f;
+                 }
+                 else {
+                     enemy_direction.y += 1.0f;
+                 }*/
+
+                 //enemy_direction = Vector2Normalize(enemy_direction);
+
+                 //Calculate angle so enemy looks at player
+                 Vector2 toPlayer = Vector2Subtract(playerPosition, enemies[i].position);
+                 float distance = Vector2Length(toPlayer);
+
+
+                 if (distance > 0.0f) {
+                     Vector2 enemy_direction = Vector2Normalize(toPlayer);
+                     enemies[i].position.x += enemy_direction.x * speed * dt;
+                     enemies[i].position.y += enemy_direction.y * speed * dt;
+                 }
+
+                 enemies[i].frameTimer += dt;
+                 if (enemies[i].frameTimer >= 0.12f) {
+                     enemies[i].frameTimer = 0.0f;
+                     enemies[i].currentFrame = (enemies[i].currentFrame + 1) % enemies[i].totalFrames;
+                 }
+
+
+
+                 float angleRad = atan2f(toPlayer.y, toPlayer.x);
+                 enemies[i].angleDeg = angleRad * RAD2DEG;
+
+
+             }
+        }
+    }
+    
+    vector<EnemyInstance> enemies;
+    float width;
+    float height;
+    float totalFrames;
+    float speed;
+};
+
+struct ItemInstance {
+    Texture _texture;
+    Vector2 position;
+};
+
+class Item {
+public:
+    Item(const ItemInstance& item_instance) {
+        _texture = item_instance._texture;
+           
+    }
+    void Load() {
+        vector<int> xPool;
+        vector<int> yPool;
+
+        // Fill pools with multiples of 50
+        for (int x = 50; x <= (int)GetScreenWidth() - 50; x += 50) xPool.push_back(x);
+        for (int y = 50; y <= (int)GetScreenHeight() - 50; y += 50) yPool.push_back(y);
+
+        // Shuffle both
+        random_device rd;
+        mt19937 g(rd());
+        shuffle(xPool.begin(), xPool.end(), g);
+        shuffle(yPool.begin(), yPool.end(), g);
+
+        for (int i = 0; i < num_of_items && i < xPool.size() && i < yPool.size(); i++) {
+             Vector2 pos = {xPool[i] * 2,yPool[i] * 2};
+            items.emplace_back(ItemInstance(_texture, pos));
+
+        }
+    }
+
+    void Draw() {
+        static Color colors[] = {GREEN , WHITE, RED, ORANGE, BLUE , YELLOW};
+        int size = 6;
+        int index = GetRandomValue(0, size-1);
+        for(int i = 0; i < items.size() && i < size; i++) {
+            if(active) {
+                DrawTextureEx(items[i]._texture,items[i].position, 0.0f, Config::ITEM_SCALE, colors[i]);
+            }
+        }
+    }
+
+
+    vector<ItemInstance> items;
+    Texture _texture;
+    Color colors[6];
+    bool active = true;
+    int num_of_items = 50;
+    vector<float> xPool;
+};
+
+
+int main() {
+
+    //Definition
+    SetConfigFlags(FLAG_WINDOW_RESIZABLE);
+    InitWindow(Config::BASE_WIDTH, Config::BASE_HEIGHT, Config::TITLE.c_str());
+    SetTargetFPS(120);
+
+    RenderTexture canvas = LoadRenderTexture(Config::BASE_WIDTH, Config::BASE_HEIGHT);
+    SetTextureFilter(canvas.texture, TEXTURE_FILTER_BILINEAR);
+
+    Texture wallTexture = LoadTexture("assets/images/Walls.png");
+    Texture floorTexture = LoadTexture("assets/images/Floor.png");
+    Texture shooter = LoadTexture("assets/images/survivor-idle_shotgun_0.png");
+    Texture collisionMap = LoadTexture("assets/images/gameBgCollision.png");
+    Texture bulletTexture = LoadTexture("assets/images/bullet.png");
+    Texture enemyTexture = LoadTexture("assets/images/cockroach-move.png");
+    Texture itemTexture = LoadTexture("assets/images/book1.png");
+
+    Player player(shooter);
+    CollisionMap map(collisionMap);
+
+    Camera2D camera = {0};
+    camera.target = player.position;
+    camera.offset = {player.position.x, player.position.y};
+    camera.rotation = 0.0f;
+    camera.zoom = 1.0f;
+
+    Vector2 playerCenter = player.GetCenter();
+    BulletInstance bullet_instance(bulletTexture,playerCenter);
+    Bullet playerBullet;
+    playerBullet.Load(bullet_instance);
+
+    EnemyInstance enemy_instance(enemyTexture,8);
+    Enemy enemy;
+    enemy.Load(enemy_instance);
+
+
+    ItemInstance item_instance(itemTexture, {0.0f, 0.0f});
+    Item item(item_instance);
+    item.Load();
+
+    //Game Loop
+    while (!WindowShouldClose()) {
+        //1 . Event Handling
+        player.Move();
+
+        //2. Updating Position
+        camera.target = player.position;
+        map.CheckWallCollision(player.position, shooter.width,shooter.height,Config::PLAYER_SCALE); // check player collision of wall and restrict movement
+        for(auto item : item.items) map.CheckWallCollision(item.position, itemTexture.width, itemTexture.height, Config::ITEM_SCALE); // check item restriction
+        playerCenter = player.GetCenter();
+        playerBullet.Launch(playerCenter);
+
+        enemy.Move(player.position);
+
+        for(auto &b : playerBullet.bullets) { //Check Bullet and Enemy Collision
+                if(!b.active) continue;
+                for(auto &e: enemy.enemies) {
+                    if(!e.active) continue;
+
+                    if(map.CheckCollision(Rectangle{b.position.x, b.position.y,bulletTexture.width * Config::BULLET_SCALE, 
+                    bulletTexture.height * Config::BULLET_SCALE}, Rectangle{e.position.x , e.position.y, enemyTexture.width * Config::ENEMY_SCALE, enemyTexture.height * Config::ENEMY_SCALE})) {
+                            cout << "Enemy Live Left" << e.live << endl;
+                            b.active = false;
+
+                            e.live -= 5; // remoeve 5hp from enemy live for every bullet attack
+
+                            if(e.live <= 0) {
+                                e.active = false;
+                            }
+                            
+                            cout << "Enemy Killed" << endl;
+                            break;
+                    }
+                }
+        }
+
+        //Check Enemy tp Player Collision
+        for(auto&e : enemy.enemies) {
+            if(!e.active) continue;
+            if(map.CheckCollision(Rectangle{player.position.x, player.position.y, shooter.width * Config::PLAYER_SCALE ,shooter.height * Config::PLAYER_SCALE}, Rectangle{e.position.x, e.position.y, e._enemy_texture.width * Config::ENEMY_SCALE, e._enemy_texture.height * Config::ENEMY_SCALE})) {
+                player.lives -= 7;
+                if(player.lives <= 0) {
+                    cout << "Player Killed" << endl;
+                }
+            }
+        }
+
+        
+        //3. Drawing Object
+        BeginTextureMode(canvas);
+        ClearBackground(BLACK);
+            BeginMode2D(camera);
+                DrawTextureEx(floorTexture,{0.0f,0.0f},0.0f,1.0f,WHITE);
+                DrawTextureEx(wallTexture,{0.0f,0.0f},0.0f,1.0f,WHITE);
+                player.Draw();
+                playerBullet.Draw();
+                enemy.Draw();
+                item.Draw();
+            EndMode2D();
+            DrawRectangle(0,GetScreenHeight() - 20, 40, 30, BLUE);
+            DrawText(TextFormat("%i",bulletCount), 10,GetScreenHeight() - 15, 12, WHITE);
+        EndTextureMode();
+
+        BeginDrawing();
+        ClearBackground(BLACK);
+            float scale = std::min(
+                GetScreenWidth() / Config::BASE_WIDTH, GetScreenHeight() / Config::BASE_HEIGHT
+            );
+            Rectangle source = {
+                0.0f,0.0f, Config::BASE_WIDTH, -Config::BASE_HEIGHT
+            };
+            Rectangle dest = {
+                ((float) GetScreenWidth() - (Config::BASE_WIDTH * scale)) * 0.5f,((float) GetScreenHeight() - (Config::BASE_HEIGHT * scale)) * 0.5f, Config::BASE_WIDTH * scale, Config::BASE_HEIGHT * scale
+            };
+
+            Vector2 origin = {
+                0.0f,0.0f
+            };
+            DrawTexturePro(canvas.texture,source,dest,origin,0.0f,WHITE);
+        EndDrawing();
+
+    }
+
+    
+    UnloadTexture(floorTexture);
+    UnloadTexture(wallTexture);
+    UnloadTexture(shooter);
+    UnloadTexture(collisionMap);
+    UnloadTexture(bulletTexture);
+    UnloadTexture(enemyTexture);
+    UnloadTexture(itemTexture);
+    UnloadRenderTexture(canvas);
+
+    CloseWindow();
+
+    return 0;
+}
