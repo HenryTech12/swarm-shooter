@@ -192,7 +192,7 @@ public:
         }
     }
     vector<BulletInstance> bullets;
-    int totalbullet = 5;
+    int totalbullet = 100;
 private:
     float angle = 0.0f;
 
@@ -590,20 +590,25 @@ int main() {
         playerBullet.ReLoad();
 
 
-         for(auto &item : item.items) {
-             if(map.CheckCollision(Rectangle{player.position.x, player.position.y, shooter.width * Config::PLAYER_SCALE ,shooter.height * Config::PLAYER_SCALE},
-             Rectangle{item.position.x, item.position.y, itemTexture.width * Config::ITEM_SCALE, itemTexture.height * Config::ITEM_SCALE})) {
+
+         for(auto &currentItem : item.items) {
+             int playerWidth = shooter.width * Config::PLAYER_SCALE;
+             int playerHeight = shooter.height * Config::PLAYER_SCALE;
+
+             int itemWidth = itemTexture.width * Config::ITEM_SCALE;
+             int itemHeight = itemTexture.height * Config::ITEM_SCALE;
+             if(currentItem.active && map.CheckCollision(Rectangle{player.position.x - playerWidth/2.0f, player.position.y - playerHeight/2, playerWidth  ,playerHeight},
+             Rectangle{currentItem.position.x - itemWidth/2, currentItem.position.y - itemHeight/2.0f, itemWidth, itemHeight})) {
                  cout << "Item Picked Up" << endl;
-                 item.active = false;
+                 currentItem.active = false;
                  items_picked++;
-                 break; // Exit the loop after picking up one item to avoid multiple pickups in a single frame
-             }
+            }
          }
 
         //2. Updating Position
         camera.target = player.position;
         map.CheckWallCollision(player.position, shooter.width,shooter.height,Config::PLAYER_SCALE); // check player collision of wall and restrict movement
-        for(auto& item : item.items) map.CheckWallCollision(item.position, itemTexture.width, itemTexture.height, Config::ITEM_SCALE); // check item restriction
+        for(auto& currentItem : item.items) map.CheckWallCollision(currentItem.position, itemTexture.width, itemTexture.height, Config::ITEM_SCALE); // check item restriction
         playerCenter = player.GetCenter();
         playerBullet.Launch(playerCenter);
         playerBullet.DeactivateBullet(collisionMap.width, collisionMap.height);
@@ -679,10 +684,11 @@ int main() {
             }
         }
 
-       if(player.lives < 100) {
-         player.lives += healthPotion.CheckPickup(Rectangle{
+       int healthBonus = healthPotion.CheckPickup(Rectangle{
             player.position.x, player.position.y,
                 shooter.width * Config::PLAYER_SCALE, shooter.height * Config::PLAYER_SCALE });
+       if(player.lives + healthBonus <= 100) {
+            player.lives += healthBonus;
        }
         
         //3. Drawing Object
@@ -720,6 +726,7 @@ int main() {
             if(proceedToNextLevel) {
                 DrawText(TextFormat("Next Level: %i",enemy.level), GetScreenWidth() / 2 - 50, GetScreenHeight() / 2, 20, RED);
             }
+            DrawText(TextFormat("Items Picked: %i",items_picked), 10,GetScreenHeight() - 35, 12, WHITE);
         EndTextureMode();
 
         BeginDrawing();
